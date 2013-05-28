@@ -9,7 +9,7 @@ module.exports = Template.extend({
 		{
 			if(callback)
 			{
-				this.loadCallbacks.push(callback) ;
+				this.once("loaded",callback) ;
 			}
 
 			if(!this.loading)
