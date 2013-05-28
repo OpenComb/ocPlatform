@@ -11,6 +11,8 @@ var utilstr = require("ocplatform/lib/util/string.js") ;
 		this.$document = $document || jQuery(document) ;
 		this._request = null ;
 		this.enable = true ;
+		this._stateQueue = [] ;
+		this._currentState ;
 	}
 
 	Director.prototype.setup = function($)
@@ -43,48 +45,154 @@ var utilstr = require("ocplatform/lib/util/string.js") ;
 		}
 
 		// for link(a tag)
-		this.$document.on("click","a.stay,a.stay-view,a.stay-top,a.stay-lazy,a.stay-action",onRequestElement) ;
+		this.$document.on("click","a.stay,a.stay-view,a.stay-top,a.stay-lazy,a.stay-action,a.stay-modal",onRequestElement) ;
 
 		// for form
-		this.$document.on("submit","form.stay,form.stay-view,form.stay-top,form.stay-lazy,form.stay-action",onRequestElement) ;
+		this.$document.on("submit","form.stay,form.stay-view,form.stay-top,form.stay-lazy,form.stay-action,a.stay-modal",onRequestElement) ;
 
 		// state 事件
 		window.onpopstate = function(e) {
 
-			if(e.state && e.state.ocstate)
+			if(e.state && e.state.ocstate && director._currentState)
 			{
-				if(e.state.data && e.state.data.constructor!==Array)
+				//console.log('current',director._currentState) ;
+				//console.log('popup',e.state) ;
+
+				// 失败，可能是 history state 链因为网页被刷新，或释放缓存等原因缺少视图信息
+				if( !director._moveOnHistoryQueue(e.state) )
 				{
-					var data = [] ;
-					for(var name in e.state.data)
+					// 加载控制器，重新获取视图
+					if(e.state.data && e.state.data.constructor!==Array)
 					{
-						data.push({name:name,value:e.state.data[name]}) ;
+						var data = [] ;
+						for(var name in e.state.data)
+						{
+							data.push({name:name,value:e.state.data[name]}) ;
+						}
+						e.state.data = data ;
 					}
-					e.state.data = data ;
+				
+					director.request(
+						{
+							url: e.state.url
+							, data: e.state.data || []
+						}
+						, {
+							target: 'lazy'
+							, historyStateIndex: e.state.index
+						}
+					) ;
+
+					director._currentState = e.state ;
 				}
-			
-				director.request(
-					{
-						url: e.state.url
-						, data: e.state.data || []
-					}
-					, {
-						target: 'lazy'
-						, history: false
-					}
-				) ;
 			}
 		} ;
 
 		// 处理首次请求
 		if( window.history.replaceState )
 		{
-			window.history.replaceState({
-				url: location.pathname
-				, data: queryStrings(location.search)
-				, ocstate: true
-			},null) ;
+			if(!window.history.state||!window.history.state.ocstate)
+			{
+				var state = {
+					url: location.pathname
+					, data: queryStrings(location.search)
+					, ocstate: true
+					, index: 0
+				} ;
+				window.history.replaceState(state,null) ;
+				this._stateQueue[state.index] = state ;
+				this._currentState = state ;
+			}
+			// 可能是用户刷新网页
+			else
+			{
+				this._currentState = window.history.state ;
+			}
 		}
+	}
+
+	Director.prototype._moveOnHistoryQueue = function(state)
+	{
+		// 后退
+		if( this._currentState.index > state.index )
+		{
+			var reserts = this._stateQueue.slice(state.index+1,this._currentState.index+1) ;
+
+			// history state 链断掉
+			if(!reserts.length)
+			{
+				return false ;
+			}
+
+			for(var i=reserts.length-1;i>=0;i--)
+			{
+				var _state = this._stateQueue[ reserts[i].index ] ;
+
+				if(!_state || !_state.newview || !_state.target)
+				{
+					// history state 链断掉
+					return false ;
+				}
+				else
+				{
+					// 无动画还原后续state
+					if(i)
+					{
+						jQuery(_state.newview).replaceWith(_state.target) ;
+					}
+					else
+					{
+						// 动画还原最近一个state
+						jQuery.switcher.replacein(undefined,_state.target,_state.newview) ;
+					}
+				}
+			}
+
+			this._currentState = state ;
+		}
+
+		// 前进
+		else if(this._currentState.index < state.index)
+		{
+			var reserts = this._stateQueue.slice(this._currentState.index+1,state.index+1) ;
+
+			// history state 链断掉
+			if(!reserts.length)
+			{
+				return false ;
+			}
+
+			for(var i=0;i<reserts.length;i++)
+			{
+				var _state = this._stateQueue[ reserts[i].index ] ;
+
+				if(!_state || !_state.newview || !_state.target)
+				{
+					// history state 链断掉
+					return false ;
+				}
+				else
+				{
+					// 无动画还原后续state
+					if( i<reserts.length-1 )
+					{
+						jQuery(_state.target).replaceWith(_state.newview) ;
+					}
+
+					// 动画应用最后一个state
+					else
+					{
+						jQuery.switcher.replacein(undefined,_state.newview,_state.target) ;
+					}
+
+					this._currentState = _state ;
+				}
+			}
+
+			this._currentState = state ;
+		}
+
+		return true ;
 	}
 
 	/**
@@ -116,6 +224,10 @@ var utilstr = require("ocplatform/lib/util/string.js") ;
 					else if( $element.hasClass('stay-action') )
 					{
 						then = 'action' ;
+					}
+					else if( $element.hasClass('stay-modal') )
+					{
+						then = 'modal' ;
 					}
 					else
 					{
@@ -156,6 +268,7 @@ var utilstr = require("ocplatform/lib/util/string.js") ;
 			return {} ;
 		}
 
+		
 		if( typeof then.target=='string' )
 		{
 			switch(then.target)
@@ -176,16 +289,16 @@ var utilstr = require("ocplatform/lib/util/string.js") ;
 					break ;
 
 				case 'action' :
-					then = {
-						callback: function(err,nut)
-						{
-							if(err)
-							{
-								console.log(err) ;
-							}
-							nut.msgqueue && nut.msgqueue.popup() ;
-						}
+					then.callback = function(err,nut){
+						err && console.log(err) ;
+						nut.msgqueue && nut.msgqueue.popup() ;
 					}
+					then.target = undefined ;
+					break ;
+					
+				case 'modal' :
+					then.target = this.modalview() ;
+					then['switch'] = "modal" ;
 					break ;
 					
 				case 'lazy' :
@@ -199,7 +312,7 @@ var utilstr = require("ocplatform/lib/util/string.js") ;
 					break ;
 			}
 		}
-
+		
 		return then ;
 	}
 
@@ -375,57 +488,13 @@ var utilstr = require("ocplatform/lib/util/string.js") ;
 	 * 接着处理后续事务
 	 */
 	Director.prototype.then = function(nut,thenOpt,ajaxReq)
-	{
+	{		
 		if(thenOpt.target===null)
 		{
 			thenOpt.target = this.compareLayoutStruct(nut) ;
 		}
 
-		// 根据 thenOpt.target 决定是否需要向 history 增加记录
-		// thenOpt.target 在某个 layout 内， 则 thenOpt.target 为主视图 或 layout
-		// （todo:这个部分应该专门设计一个对象来负责）
-		if( thenOpt.history!==false && thenOpt.target && jQuery(thenOpt.target).parent().hasClass('oclayout-container') /*&& (!ajaxReq.type || ajaxReq.type.toLowerCase()=='get')*/ )
-		{
-			// console.log(ajaxReq) ;
-			var info = utilstr.parseUrl(ajaxReq.url) ;
-			var search = [] ;
-			for(var name in info.params)
-			{
-				if(name[0]!='@')
-				{
-					search.push( name+'='+info.params[name] ) ;
-				}
-			}
-			if(ajaxReq.data)
-			{
-				for(var i=0;i<ajaxReq.data.length;i++)
-				{
-					var name = ajaxReq.data[i].name ;
-					if(name[0]!='@')
-					{
-						search.push( name+'='+ajaxReq.data[i].value ) ;
-					}
-				}
-			}
-			var url = info.protocol + '://' + info.host + (info.port? (':'+info.port):'') + info.path ;
-			if( search.length )
-			{
-				url+= '?' + search.join('&') ;
-			}
-			// console.log("history",ajaxReq.url,ajaxReq.data,'=>',url) ;
-
-			window.history.pushState && window.history.pushState(
-				{
-					url: url
-					, data: ajaxReq.data
-					, type: ajaxReq.type
-					, ocstate: true
-				}
-				, null
-				, url
-			) ;
-		}
-
+		var director = this ;
 
 		// 剥开果壳 :)
 		nut.crack(function(err,html){
@@ -480,11 +549,79 @@ var utilstr = require("ocplatform/lib/util/string.js") ;
 					{
 						console.log(err.stack) ;
 					}
+
+					// pjax 历史记录
+					director.insertState(ajaxReq,thenOpt,$rootview[0],thenOpt.target) ;
+
 					thenOpt.callback && thenOpt.callback(err,nut,$rootview) ;
 				}
 			)
 
 		}) ;
+	}
+
+	Director.prototype.insertState = function(ajaxReq,thenOpt,newView,target)
+	{
+		if( thenOpt.history===false )
+		{
+			return ;
+		}
+
+		// console.log(ajaxReq) ;
+		var info = utilstr.parseUrl(ajaxReq.url) ;
+		var search = [] ;
+		for(var name in info.params)
+		{
+			if(name[0]!='@')
+			{
+				search.push( name+'='+info.params[name] ) ;
+			}
+		}
+		if(ajaxReq.data)
+		{
+			for(var i=0;i<ajaxReq.data.length;i++)
+			{
+				var name = ajaxReq.data[i].name ;
+				if(name[0]!='@')
+				{
+					search.push( name+'='+ajaxReq.data[i].value ) ;
+				}
+			}
+		}
+		var url = info.protocol + '://' + info.host + (info.port? (':'+info.port):'') + info.path ;
+		if( search.length )
+		{
+			url+= '?' + search.join('&') ;
+		}
+		// console.log("history",ajaxReq.url,ajaxReq.data,'=>',url) ;
+		
+		//console.log("history.state = ",history.state,(history.state&&history.state.index)) ;
+		var state = {
+				url: url
+				, data: ajaxReq.data
+				, type: ajaxReq.type
+				, ocstate: true
+				, index: thenOpt.historyStateIndex!==undefined?
+									thenOpt.historyStateIndex: 
+									((history.state&&history.state.index)||0) + 1
+			} ;
+		console.log("then",state) ;	
+		if( thenOpt.historyStateIndex===undefined )
+		{
+			window.history.pushState && window.history.pushState( state, null, url ) ;
+		}
+
+		state.target = target ;
+		state.newview = newView ;
+		this._stateQueue[state.index] = state ;
+		this._currentState = state ;
+		//console.log('_currentState = ',state) ;
+
+		// 清除后面的缓存
+		if(this._stateQueue.length>state.index+1)
+		{
+			this._stateQueue.splite(state.index+1) ;
+		}
 	}
 
 	/**

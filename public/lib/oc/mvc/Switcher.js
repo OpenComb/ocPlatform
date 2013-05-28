@@ -6,6 +6,7 @@
 		this._animates = {} ;
 
 		this.registerAnimate('slide',slideLeft,slideRight) ;
+		this.registerAnimate('modal',modalPopup) ;
 		this.defaultAnimation = 'slide' ;
 	}
 
@@ -158,6 +159,28 @@
 	function slideRight(option,newview,target,callback)
 	{
 	}
+
+
+	// ---
+	function modalview()
+	{
+		var $view = jQuery(".ocview-pjax-modal") ;
+		if(!$view.length)
+		{
+			var $view = jQuery('<div class="ocview-pjax-modal"></div>').appendTo(document.body) ;
+		}
+		return $view ;
+	}
+
+	function modalPopup(option,newview,target,callback)
+	{
+		modalview().html('')
+				.append(newview)
+				.popup() ;
+		callback && callback() ;
+	}
+
+
 
 })(jQuery) ;
 
